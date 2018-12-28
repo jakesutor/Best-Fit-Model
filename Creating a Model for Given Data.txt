@@ -1,0 +1,180 @@
+library(xlsx)
+data <- read.xlsx("~/Third Year/STAT/dat.xlsx", 1)
+attach(data)
+
+#These are not categorical predictors and we have no polynomials or interactions
+
+#Check for outliers
+summary(data)
+#Only outliers in y. The others all contain potential outliers because the 1st to
+#third quarters are all between -1 and 1 while the min and max are -2/-3 and 2/3
+#But nothing major like in y
+
+
+#Fit multiple linear regression with only additive effects
+result<-lm(y~x1+x2+x3+x4+x5+x6+x7+x8+x9+x10, data=data)
+summary(result)
+anova(result)
+#In both, we see that only x5 is significant
+
+#####FIRST STEP#####
+#Check residuals of model
+plot(result$fitted.values,result$residuals, 
+     xlab="Fitted Values", ylab="Residuals", main="Plot of 
+     Residuals vs Fits")
+abline(h=0,col="red")
+#Not evenly distributed around 0. Seems to have an average value of around 0, but
+#also has a downward trend with some outliers.
+#Need to transform Y
+library(MASS)
+boxcox(result)
+boxcox(result, lambda = seq(-0.5, 0.5, 0.001))
+#lambda is 0 so we need to use log(y)
+result.transform<-lm(log(y)~x1+x2+x3+x4+x5+x6+x7+x8+x9+x10, data=data)
+anova(result.transform)
+summary(result.transform)
+#We now have x1, x3, and x5 as significant
+#Recheck residuals
+plot(result.transform$fitted.values,result.transform$residuals, 
+     xlab="Fitted Values", ylab="Residuals", main="Plot of 
+     Residuals vs Fits")
+abline(h=0,col="red")
+#Much better - just one outlier remaining
+
+
+###Need to test significance and then rerun regression####
+
+#Backward elimination####
+result.b<-step(result.transform, direction="backward",trace=FALSE)
+summary(result.b)
+#Says that x2, x3, x4, and x5 should be kept
+
+#Forward selection####
+start<-lm(log(y)~x5, data=data)
+end<-lm(log(y)~.,data=data)
+result.f<-step(start, scope=list(lower=start, upper=end), direction="forward", trace=FALSE)
+summary(result.f)
+#Also says x2, x3, x4, and x5 should be kept
+
+#Try result again with x1 x2 x3 x4 and x5 in equation####
+result2<-lm(log(y)~x1+x2+x3+x4+x5, data=data)
+anova(result2)
+summary(result2)
+#F-test gives .1724 so we fail to reject the null that x6 x7 x8 x9 x10 are zero
+
+#Diagnosing multicollinearity
+pairs(~x1+x2+x3+x4+x5)
+cor(data)
+library(psych)
+corr.test(data[2:6])
+#There appears to be strong multicollinearity between x1 and x2. The others are 
+#all very weakly correlated
+#Test VIF
+library(faraway)
+vif(result2)
+#x1 and x2 are 479.9 which is exponentially larger than 4 which is the threshold
+#at which we need to consider multicollinearity
+
+#How to respond to this? Either drop one of the vars or add more data. We do not
+#have data to add so we will drop one fo the vars. The coefficient of x2 has a
+#significant result so we will try to drop x1
+
+#Can we drop x1 from new result?
+result2b<-lm(log(y)~x2+x3+x4+x5+x1, data=data)
+anova(result2b)
+result3<-lm(log(y)~x2+x3+x4+x5, data=data)
+anova(result3)
+#F-test gives .205 and t-test is .6 so we cannot reject the null that coefficient
+#of x1 is zero
+#Test VIF again
+vif(result3)
+#no more problems with multicollinearity
+
+
+#Can we drop x4?
+result3b<-lm(log(y)~x2+x3+x5+x4)
+anova(result3b)
+result4<-lm(log(y)~x2+x3+x5)
+anova(result4)
+#F-test gives 4.61 > f-stat which is 3.94 and p-value of the t-test is .03442 so 
+#we reject the null that the coefficient of x4 is zero
+
+#Still have to address the one outlier in our residuals
+#Plot externally studentized residuals vs leverages
+tmp<-lm.influence(result3)
+plot(tmp$hat,result3$residuals, 
+     xlab="Leverages", ylab="Residuals", main="Plot of 
+     Residuals vs Leverages")
+abline(h=0,col="red")
+#still find an outlier
+DFFITS<-dffits(result)
+DFFITS[DFFITS>1]
+data[DFFITS>1,]
+#Based on DFFITS, observations 10 and 79 are influential
+
+yhat<-y-result3$res
+res.PRESS<-result$res/(1-tmp$hat) #What is hii?
+yhat.i<-y-res.PRESS
+cbind(yhat,yhat.i)[DFFITS>1,]
+#We see that including observation 10 increases the predicted value for 10 by 
+#about 158,733 and including 79 increases the predicted value for 79 by 143,455
+
+#check for large dfbetas
+DFBETAS<-dfbetas(result3)
+round(DFBETAS,3)
+#observation 10 has a very large effect on essentially all of the predictors, 
+#while obs 79 has a significant effect primarily just on x5, which is still less
+#than the effect of obs 10
+
+#Check cooks
+COOKS<-cooks.distance(result3)
+round(COOKS, 3)
+#Compared with all the other values, which are almost entirely < 0.010, observation
+#10 having a value of 0.217 is very large. Obs 79 is also larger than all the others
+#at a value of 0.021, although neither of these are actually large values
+
+#Can we remove either observation?
+result.drop10<-lm(log(y)~x2+x3+x4+x5, data=data[-10,])
+anova(result.drop10)
+#x4 becomes significant
+result.drop79<-lm(log(y)~x2+x3+x4+x5, data=data[-79,])
+anova(result.drop79)
+#no change in significance
+
+
+#Check residuals for different corrections of nonlinearity
+plot(result.drop79$fitted.values,result.drop79$residuals, 
+     xlab="Fitted Values", ylab="Residuals", main="Plot of 
+     Residuals vs Fits")
+abline(h=0,col="red")
+plot(result.drop10$fitted.values,result.drop10$residuals, 
+     xlab="Fitted Values", ylab="Residuals", main="Plot of 
+     Residuals vs Fits")
+abline(h=0,col="red")
+
+#So we will drop observation 10 and use log(y)=x2+x3+x4+x5 as our model
+summary(result3)
+summary(result.drop79)
+summary(result.drop10)
+#Adjusted R-squared is .9531, so 95.31% of the variance in y is explained by this 
+#model, which indicates that the model is an excellent fit for the data. Also,
+#comparing the model after dropping observation 79 we see that the model is actually
+#not as good a fit as the model including that observation which has an adjusted
+#R-squared value of .8729, so we can also see that by dropping obs 10 we increase
+#the goodness of fit of the model dramatically from 87% to 95%.
+
+#Perform Lack of Fit test
+anova(result.transform)
+anova(result3)
+#F-test gives .176 so we fail to reject the null that the reduced model is a good
+#fit for the data.
+
+#Once we recognize that observation 10 should be dropped to increase the goodness
+#of fit based on R-squared, we compare the original model excluding obs 10 with 
+#the reduced model excluding obs 10.
+result.tdrop10<-lm(log(y)~x1+x2+x3+x4+x5+x6+x7+x8+x9+x10, data=data[-10,])
+anova(result.tdrop10)
+anova(result.drop10)
+#F-test gives .36 so we fail to reject the null hypothesis that the model is a good fit
+#forthe data. We also want a low SSE and when we drop obs 10 the SSE drops from 
+#234.74 to 81.96 in the reduced model, so this is a better model estimation.
